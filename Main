@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micro-Motion Studio (Contextual Wizard)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- GIF.js for exporting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    <script>
+        tailwind.config = {
+            theme: {
+                screens: {
+                    'fold': '600px',
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #020617; color: white; }
+        
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+        .candidate-wrapper {
+            position: relative;
+            aspect-ratio: 1 / 1;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            background: #1e293b;
+            transition: transform 0.2s, border-color 0.2s;
+            border: 2px solid transparent;
+        }
+        .candidate-wrapper:active { transform: scale(0.95); }
+        .candidate-img { width: 100%; height: 100%; object-fit: cover; transition: opacity 0.2s; }
+        
+        .reference-img {
+            position: absolute; inset: 0; z-index: 5;
+            opacity: 0; transition: opacity 0.2s;
+        }
+        .generated-img { position: relative; z-index: 10; }
+        .diff-on .generated-img { opacity: 0.6; }
+        .diff-on .reference-img { opacity: 1; }
+
+        .watch-preview {
+            border-radius: 50%; border: 4px solid #333;
+            background: black; position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); overflow: hidden;
+        }
+
+        .loader-dot { animation: loader-bounce 0.6s infinite alternate; }
+        .loader-dot:nth-child(2) { animation-delay: 0.2s; }
+        .loader-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes loader-bounce { to { transform: translateY(-10px); } }
+
+        .layout-grid { display: flex; flex-direction: column; width: 100%; }
+        @media (min-width: 600px) {
+            .layout-grid {
+                display: grid;
+                grid-template-columns: 1fr 320px;
+                grid-template-rows: auto 1fr;
+                grid-template-areas:
+                    "prompt timeline"
+                    "candidates preview";
+                gap: 1rem;
+                padding: 1rem;
+                height: 100%;
+                overflow: hidden;
+            }
+        }
+        #area-prompt { grid-area: prompt; }
+        #area-candidates { grid-area: candidates; }
+        #area-timeline { grid-area: timeline; }
+        #area-preview { grid-area: preview; }
+        
+        .diff-btn {
+            background-color: #1e293b; border: 1px solid #334155; color: #94a3b8;
+            padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 600;
+        }
+        .diff-btn.active {
+            background-color: #60a5fa; border-color: #60a5fa; color: white;
+        }
+        .tween-btn {
+            background-color: #1e293b; border: 1px dashed #334155; color: #60a5fa;
+            font-size: 10px; font-weight: bold; padding: 8px 4px; margin: 4px 0;
+            border-radius: 6px; text-align: center; cursor: pointer; transition: all 0.2s;
+            width: 100%;
+        }
+        .tween-btn:hover { background-color: #293548; border-color: #60a5fa; }
+        
+        .suggestion-btn {
+            flex-shrink: 0; padding: 4px 8px;
+            background-color: #1e293b; border: 1px solid #334155;
+            border-radius: 6px; font-size: 10px; color: #94a3b8; white-space: nowrap;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-950">
+
+    <!-- Header -->
+    <div class="h-12 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 flex-shrink-0 z-30 shadow-md">
+        <div class="flex items-center gap-2">
+            <div class="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-900/50">
+                <i class="fas fa-film text-xs"></i>
+            </div>
+            <h1 class="text-sm font-bold text-slate-100">Motion Studio</h1>
+        </div>
+        
+        <div class="flex items-center gap-3">
+            <button id="backToProjectsBtn" class="bg-slate-800 text-slate-400 hover:text-white px-3 py-1.5 rounded text-[10px] font-bold uppercase border border-slate-700 transition hidden">
+                <i class="fas fa-chevron-left"></i> Projects
+            </button>
+            <button id="compileBtn" class="bg-emerald-600 disabled:bg-slate-800 disabled:text-slate-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wide transition flex items-center gap-2 hidden" disabled>
+                <span>Export</span>
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- MAIN CONTENT CONTAINER -->
+    <div id="mainContainer" class="flex-grow overflow-y-auto">
+        
+        <!-- VIEW 1: PROJECT LOADER -->
+        <div id="projectScreen" class="p-4">
+            <h2 class="text-lg font-bold text-white mb-4">My GIF Projects</h2>
+            <button id="newProjectBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-900/20 transition active:scale-[0.99] flex items-center justify-center gap-2 text-sm mb-4" disabled>
+                <i class="fas fa-plus"></i> Start New Project
+            </button>
+
+            <div id="projectListContainer" class="space-y-3">
+                <div id="loader-message" class="text-center text-slate-500 py-10">
+                    <i class="fas fa-spinner animate-spin text-2xl"></i>
+                    <p class="mt-2 text-sm">Authenticating...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW 2: EDITOR (Initially Hidden) -->
+        <div id="editorScreen" class="hidden">
+            <div class="layout-grid w-full h-full">
+                
+                <!-- (Mobile Order 1) QUADRANT 4: PREVIEW -->
+                <div id="area-preview" class="order-1 fold:order-4 bg-black p-4 fold:rounded-2xl border-b fold:border border-slate-800 flex flex-col items-center justify-center relative min-h-[250px] shadow-lg fold:shadow-none">
+                    <div class="watch-preview w-[180px] h-[180px] transition-all duration-300">
+                        <img id="previewImg" class="w-full h-full object-cover" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" />
+                        <div class="absolute top-6 w-full text-center pointer-events-none">
+                             <div class="text-white text-3xl font-light tracking-tight drop-shadow-md">10:09</div>
+                        </div>
+                    </div>
+                    
+                    <div class="w-full max-w-xs px-6 pt-4">
+                        <div class="flex justify-between text-[9px] text-slate-500 mb-1 uppercase font-bold">
+                            <span>Speed</span>
+                            <span id="fpsVal" class="text-blue-400">10 FPS</span>
+                        </div>
+                        <input type="range" id="fpsInput" min="1" max="24" value="10" class="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500">
+                    </div>
+                    <div class="fold:hidden absolute bottom-1 w-8 h-1 bg-slate-800 rounded-full"></div>
+                </div>
+
+                <!-- (Mobile Order 2) QUADRANT 1: PROMPT -->
+                <div id="area-prompt" class="order-2 fold:order-1 bg-slate-900 p-4 fold:rounded-2xl border-b fold:border border-slate-800 flex flex-col shadow-sm min-h-min z-20">
+                    <div class="flex justify-between items-center mb-2">
+                        <span id="frameCounter" class="text-[10px] font-bold text-blue-400 uppercase bg-blue-400/10 px-2 py-1 rounded">Add New Frame</span>
+                        <span id="projectTitle" class="text-xs text-slate-400 font-bold"></span>
+                    </div>
+                    <div class="flex gap-3 mb-2 flex-grow">
+                        <textarea id="promptInput" class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none text-sm leading-relaxed resize-none" placeholder="Describe the scene..." style="min-height: 80px;"></textarea>
+                        
+                        <div id="prevFrameRef" class="hidden w-20 h-20 flex-shrink-0 bg-black rounded-xl border border-slate-700 relative overflow-hidden group cursor-pointer shadow-lg">
+                            <img id="prevRefImg" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition" />
+                            <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                <span class="text-[8px] uppercase bg-black/60 px-1 rounded text-slate-300 backdrop-blur-sm">Ref</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2 mb-2 items-center">
+                         <label class="text-[10px] text-slate-500 uppercase font-bold whitespace-nowrap">Smart Focus</label>
+                         <input type="text" id="smartFocusInput" class="flex-grow bg-slate-800 border border-slate-700 rounded text-xs px-2 py-1 text-white" placeholder="e.g., 'eyes', 'background'">
+                         <button id="refreshSuggestions" class="px-2 py-1 bg-slate-700 text-slate-400 hover:text-white rounded border border-slate-700 text-xs"><i class="fas fa-sync"></i></button>
+                    </div>
+
+                    <div id="quickActionsContainer" class="flex overflow-x-auto gap-2 py-2 mb-1 no-scrollbar min-h-[30px]">
+                        <span class="text-xs text-slate-600 italic">Select a frame to get ideas...</span>
+                    </div>
+
+                    <!-- Buttons Container -->
+                    <div class="flex gap-2 mt-auto">
+                        <button id="generateBtn" class="flex-grow bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-900/20 transition active:scale-[0.99] flex items-center justify-center gap-2 text-sm">
+                            <i class="fas fa-plus"></i> <span id="genBtnText">Add Keyframe</span>
+                        </button>
+                        
+                        <!-- New Magic Sequence Button -->
+                        <button onclick="openSequenceWizard()" class="flex-none w-12 bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-purple-900/20 transition active:scale-[0.99] flex items-center justify-center">
+                            <i class="fas fa-magic"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- (Mobile Order 3) QUADRANT 2: CANDIDATES -->
+                <div id="area-candidates" class="order-3 fold:order-3 bg-slate-900 p-4 fold:rounded-2xl border-b fold:border border-slate-800 fold:overflow-y-auto min-h-[200px]">
+                    <div id="diffControls" class="hidden flex-wrap items-center justify-between gap-2 mb-3 bg-slate-800 p-2 rounded-lg">
+                        <button id="onionToggle" class="diff-btn flex-grow">Show Diff</button>
+                        <div id="tweenToggleContainer" class="hidden flex-grow justify-end gap-2">
+                            <button id="showRefA" class="diff-btn">Ref A</button>
+                            <button id="showRefB" class="diff-btn">Ref B</button>
+                        </div>
+                    </div>
+                    
+                    <h3 id="candidatesHeader" class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 sticky top-0 bg-slate-900 z-10 pb-2">Candidates</h3>
+                    <div id="candidatesGrid" class="grid grid-cols-2 gap-3 content-start pb-4">
+                        <div class="col-span-2 h-32 flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-800 rounded-xl">
+                            <i class="fas fa-layer-group text-xl mb-2 opacity-40"></i>
+                            <p class="text-xs">Variations appear here</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- (Mobile Order 4) QUADRANT 3: TIMELINE -->
+                <div id="area-timeline" class="order-4 fold:order-2 bg-slate-900 p-4 fold:rounded-2xl border-b fold:border border-slate-800 flex flex-col fold:overflow-hidden min-h-[150px]">
+                    <div class="flex justify-between items-end mb-2">
+                        <h3 class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Timeline</h3>
+                        <span class="text-[10px] text-slate-600" id="frameCountTotal">0 Frames</span>
+                    </div>
+                    <div class="flex-grow fold:overflow-y-auto pr-1" id="timelineStack">
+                        <div class="text-center text-slate-600 text-xs py-4 italic opacity-50">No history</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sequence Wizard Modal -->
+    <div id="sequenceModal" class="absolute inset-0 bg-slate-950 z-40 hidden flex-col">
+        <div class="h-12 bg-purple-900 border-b border-purple-800 flex items-center justify-between px-4 flex-shrink-0">
+            <h2 class="text-sm font-bold text-purple-100"><i class="fas fa-magic mr-2"></i>Magic Sequence</h2>
+            <button onclick="closeSequenceWizard()" class="text-purple-300 hover:text-white"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="flex-grow overflow-y-auto p-6 flex flex-col items-center">
+            
+            <!-- Step 1: Describe -->
+            <div id="seqStep1" class="w-full max-w-md space-y-4">
+                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                    <label class="text-xs text-slate-400 font-bold uppercase mb-2 block">Describe the Action</label>
+                    <textarea id="seqPrompt" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-sm h-24" placeholder="e.g. A cat jumping over a fence, side view"></textarea>
+                    <!-- ⚠️ MODIFIED TEXT HERE ⚠️ -->
+                    <p class="text-[10px] text-slate-500 mt-2">The AI will generate a detailed, full-color 16-frame storyboard with annotations, arrows, and focus circles to plan the motion.</p>
+                </div>
+                <button onclick="generateSpriteSheet()" id="seqGenBtn" class="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-lg">Generate Storyboard</button>
+            </div>
+
+            <!-- Step 2: Review Rough -->
+            <div id="seqStep2" class="w-full max-w-md space-y-4 hidden">
+                <div class="text-center">
+                    <h3 class="text-lg font-bold text-white">Review Storyboard</h3>
+                    <p class="text-xs text-slate-400">Does this 4x4 grid show the right motion?</p>
+                </div>
+                
+                <div id="spriteSheetContainer" class="w-full aspect-square bg-black rounded-xl border-2 border-slate-700 overflow-hidden relative">
+                    <!-- Img injected here -->
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="resetSequenceWizard()" class="bg-slate-800 text-slate-300 font-bold py-3 rounded-xl">Discard & Retry</button>
+                    <button onclick="processSpriteSheet()" id="seqProcessBtn" class="bg-emerald-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-900/20">
+                        <i class="fas fa-check mr-2"></i> Render Final
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 3: Processing -->
+            <div id="seqStep3" class="w-full max-w-md space-y-6 hidden text-center pt-10">
+                <div class="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                <div>
+                    <h3 class="text-xl font-bold text-white">Rendering Frames...</h3>
+                    <p id="seqStatusText" class="text-sm text-slate-400 mt-2">Slicing storyboard...</p>
+                </div>
+                <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div id="seqProgressBar" class="bg-purple-500 h-full w-0 transition-all duration-300"></div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Download Modal -->
+    <div id="downloadOverlay" class="absolute inset-0 bg-slate-950/95 z-50 hidden flex-col items-center justify-center p-6 text-center backdrop-blur-sm opacity-0 transition-opacity duration-300">
+        <div class="w-full max-w-sm bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl transform scale-95 transition-transform duration-300" id="modalCard">
+            <h2 class="text-xl font-bold text-white mb-2">GIF Ready!</h2>
+            <img id="finalGifPreview" class="relative w-40 h-40 mx-auto mb-6 mt-4 rounded-full border-4 border-slate-800 object-cover shadow-xl bg-black">
+            <a id="dlLink" class="block w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl mb-3 shadow-lg shadow-emerald-900/20 transition text-sm">
+                Save to Device
+            </a>
+            <button onclick="closeModal()" class="text-slate-500 text-xs hover:text-white transition">Back to Editing</button>
+        </div>
+    </div>
+
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import {
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            onAuthStateChanged
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import {
+            getFirestore,
+            doc,
+            setDoc,
+            addDoc,
+            updateDoc,
+            deleteDoc,
+            onSnapshot,
+            collection,
+            query,
+            orderBy,
+            limit,
+            getDocs,
+            serverTimestamp,
+            writeBatch
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // -----------------------------------------------------------------
+        // ⚠️ NOTE ON API KEY:
+        // This 'apiKey' is left empty ("") on purpose.
+        // Our collaborative environment automatically supplies a key.
+        // If hosting externally, paste your Google AI API key here.
+        // -----------------------------------------------------------------
+        const apiKey = "";
+        // -----------------------------------------------------------------
+
+
+        // --- GLOBAL STATE ---
+        let db, auth, appId, userId, projectsPath;
+        let frames = [];
+        let currentProjectId = null;
+        let unsubscribeFromFrames = () => {};
+        
+        let currentCandidates = [];
+        let previewInterval = null;
+        let previewFrameIndex = 0;
+        let currentSelectionMode = 'append';
+        let spliceIndex = 0;
+        let currentRefA = null;
+        let currentRefB = null;
+
+        // Demo / local mode state (used when Firebase config is missing)
+        let isDemoMode = false;
+        let demoProjects = [];              // [{id, name, createdAt, lastModified, frameCount}]
+        let demoFramesByProject = {};       // { [projectId]: [frameObjects] }
+
+        // Sequence State
+        let currentSpriteSheetBase64 = null;
+        let currentStoryboardId = null; // ⚠️ NEW: To link frames to their storyboard
+        
+        // --- DOM ---
+        const projectScreen = document.getElementById('projectScreen');
+        const editorScreen = document.getElementById('editorScreen');
+        const projectListContainer = document.getElementById('projectListContainer');
+        const loaderMessage = document.getElementById('loader-message');
+        const newProjectBtn = document.getElementById('newProjectBtn');
+        const backToProjectsBtn = document.getElementById('backToProjectsBtn');
+        
+        const promptInput = document.getElementById('promptInput');
+        const generateBtn = document.getElementById('generateBtn');
+        const genBtnText = document.getElementById('genBtnText');
+        const candidatesGrid = document.getElementById('candidatesGrid');
+        const candidatesHeader = document.getElementById('candidatesHeader');
+        const timelineStack = document.getElementById('timelineStack');
+        const frameCounter = document.getElementById('frameCounter');
+        const prevFrameRef = document.getElementById('prevFrameRef');
+        const prevRefImg = document.getElementById('prevRefImg');
+        const compileBtn = document.getElementById('compileBtn');
+        const previewImg = document.getElementById('previewImg');
+        const fpsInput = document.getElementById('fpsInput');
+        const frameCountTotal = document.getElementById('frameCountTotal');
+        const projectTitle = document.getElementById('projectTitle');
+        const downloadOverlay = document.getElementById('downloadOverlay');
+        const modalCard = document.getElementById('modalCard');
+        const quickActionsContainer = document.getElementById('quickActionsContainer');
+        const smartFocusInput = document.getElementById('smartFocusInput');
+        const refreshSuggestions = document.getElementById('refreshSuggestions');
+        const diffControls = document.getElementById('diffControls');
+        const onionToggle = document.getElementById('onionToggle');
+        const tweenToggleContainer = document.getElementById('tweenToggleContainer');
+        const showRefA = document.getElementById('showRefA');
+        const showRefB = document.getElementById('showRefB');
+
+        // Sequence DOM
+        const sequenceModal = document.getElementById('sequenceModal');
+        const seqPrompt = document.getElementById('seqPrompt');
+        const spriteSheetContainer = document.getElementById('spriteSheetContainer');
+        const seqStatusText = document.getElementById('seqStatusText');
+        const seqProgressBar = document.getElementById('seqProgressBar');
+
+        // --- VIEW MANAGEMENT ---
+        function showView(viewName) {
+            projectScreen.classList.add('hidden');
+            editorScreen.classList.add('hidden');
+            
+            if (viewName === 'projects') {
+                projectScreen.classList.remove('hidden');
+                backToProjectsBtn.classList.add('hidden');
+                compileBtn.classList.add('hidden');
+            } else if (viewName === 'editor') {
+                editorScreen.classList.remove('hidden');
+                backToProjectsBtn.classList.remove('hidden');
+                compileBtn.classList.remove('hidden');
+            }
+        }
+        
+        function showLoaderError(message) {
+            loaderMessage.innerHTML = `
+                <i class="fas fa-exclamation-triangle text-red-400 text-2xl"></i>
+                <p class="mt-2 text-sm text-red-300">${message}</p>
+            `;
+            newProjectBtn.disabled = true;
+        }
+
+        // --- AUTH & INIT ---
+        async function initializeAppWithAuth() {
+            try {
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-gif-studio';
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                // If there is no Firebase config, fall back to a local in-memory demo mode
+                if (!firebaseConfig.apiKey) {
+                    isDemoMode = true;
+                    projectsPath = 'demo-local';
+                    loaderMessage.innerHTML = `
+                        <div class="text-xs text-slate-300">
+                            Demo mode: no backend configured. Projects are stored in memory and reset on refresh.
+                        </div>
+                    `;
+                    newProjectBtn.disabled = false;
+                    loadProjectList();   // will use demo implementation
+                    showView('projects');
+                    return;
+                }
+
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        if (userId) return;
+                        userId = user.uid;
+                        projectsPath = `/artifacts/${appId}/users/${userId}/gif_projects`;
+                        newProjectBtn.disabled = false;
+                        loadProjectList();
+                        showView('projects');
+                    }
+                });
+
+                if (!auth.currentUser) {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } else if (!userId) {
+                    userId = auth.currentUser.uid;
+                    projectsPath = `/artifacts/${appId}/users/${userId}/gif_projects`;
+                    newProjectBtn.disabled = false;
+                    loadProjectList();
+                    showView('projects');
+                }
+            } catch (e) {
+                console.error('Firebase Init Error:', e);
+                if (!isDemoMode) {
+                    showLoaderError('Error loading app. Check console.');
+                }
+            }
+        }
+
+
+
+
+// --- PROJECT MANAGEMENT ---        
+// ⚠️ REVERTED this function to the user's original, as requested.
+async function loadProjectList() {
+    if (!projectsPath) return;  
+
+    // Demo mode: pure in-memory projects
+    if (isDemoMode) {
+        if (!demoProjects.length) {
+            projectListContainer.innerHTML = `<div class="text-center text-slate-500 py-10">No projects yet. Click "Start New Project" to begin (demo mode).</div>`;
+            return;
+        }
+        const docs = [...demoProjects].sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+        projectListContainer.innerHTML = '';
+        docs.forEach((project) => {
+            const el = document.createElement('div');
+            el.className = 'bg-slate-800 p-4 rounded-lg border border-slate-700 flex justify-between items-center cursor-pointer hover:bg-slate-700 transition';
+            el.onclick = () => loadProject(project.id, project.name);
+            el.innerHTML = `
+                <div>
+                    <div class="font-bold text-white">${project.name}</div>
+                    <div class="text-xs text-slate-400">${project.frameCount || 0} frames</div>
+                </div>
+                <i class="fas fa-chevron-right text-slate-500"></i>
+            `;
+            projectListContainer.appendChild(el);
+        });
+        return;
+    }
+
+    loaderMessage.innerHTML = `<i class="fas fa-spinner animate-spin text-2xl"></i><p class="mt-2 text-sm">Loading projects...</p>`;
+    const q = query(collection(db, projectsPath));
+
+    onSnapshot(q, (snapshot) => {
+        if (snapshot.empty) {
+            projectListContainer.innerHTML = `<div class="text-center text-slate-500 py-10">No projects yet.</div>`;
+            return;
+        }
+        const docs = snapshot.docs;
+        docs.sort((a, b) => (b.data().lastModified?.toDate() || new Date(0)) - (a.data().lastModified?.toDate() || new Date(0)));
+        projectListContainer.innerHTML = '';
+        docs.forEach(docSnap => {
+            const project = docSnap.data();
+            const el = document.createElement('div');
+            el.className = 'bg-slate-800 p-4 rounded-lg border border-slate-700 flex justify-between items-center cursor-pointer hover:bg-slate-700 transition';
+            el.onclick = () => loadProject(docSnap.id, project.name);
+            el.innerHTML = `
+                <div>
+                    <div class="font-bold text-white">${project.name}</div>
+                    <div class="text-xs text-slate-400">${project.frameCount || 0} frames</div>
+                </div>
+                <i class="fas fa-chevron-right text-slate-500"></i>
+            `;
+            projectListContainer.appendChild(el);
+        });
+    });
+}
+
+newProjectBtn.addEventListener('click', async () => {
+    const name = `Project ${new Date().toLocaleTimeString()}`;
+
+    // Demo / local mode: keep everything in memory
+    if (isDemoMode) {
+        newProjectBtn.disabled = true;
+        const now = Date.now();
+
+        if (demoProjects.length >= 30) {
+            // Drop oldest
+            demoProjects.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            const removed = demoProjects.shift();
+            if (removed && demoFramesByProject[removed.id]) {
+                delete demoFramesByProject[removed.id];
+            }
+        }
+
+        const id = `demo-${now}`;
+        demoProjects.push({
+            id,
+            name,
+            createdAt: now,
+            lastModified: now,
+            frameCount: 0
+        });
+        demoFramesByProject[id] = demoFramesByProject[id] || [];
+        newProjectBtn.disabled = false;
+        loadProject(id, name);
+        return;
+    }
+
+    // Normal Firestore-backed behavior
+    newProjectBtn.disabled = true;
+    const q = query(collection(db, projectsPath));
+    const snapshot = await getDocs(q);
+    if (snapshot.docs.length >= 30) {
+        const sorted = snapshot.docs.sort((a, b) => (a.data().createdAt?.toDate() || 0) - (b.data().createdAt?.toDate() || 0));
+        await deleteProject(sorted[0].id);
+    }
+    const newProjectRef = await addDoc(collection(db, projectsPath), {
+        name,
+        createdAt: serverTimestamp(),
+        lastModified: serverTimestamp(),
+        frameCount: 0
+    });
+    newProjectBtn.disabled = false;
+    loadProject(newProjectRef.id, name);
+});
+
+async function deleteProject(projectId) {
+    if (isDemoMode) {
+        demoProjects = demoProjects.filter((p) => p.id !== projectId);
+        if (demoFramesByProject[projectId]) {
+            delete demoFramesByProject[projectId];
+        }
+        if (currentProjectId === projectId) {
+            currentProjectId = null;
+            frames = [];
+            drawTimeline();
+            startPreviewLoop();
+            frameCountTotal.innerText = '0 Frames';
+            showView('projects');
+        }
+        loadProjectList();
+        return;
+    }
+
+    // ⚠️ NEW: Delete storyboards when deleting project
+    const storyboardsQuery = collection(db, projectsPath, projectId, 'storyboards');
+    const storyboardsSnapshot = await getDocs(storyboardsQuery);
+    const batch = writeBatch(db);
+    storyboardsSnapshot.docs.forEach(docSnap => batch.delete(docSnap.ref));
+
+    const framesQuery = collection(db, projectsPath, projectId, 'frames');
+    const framesSnapshot = await getDocs(framesQuery);
+    framesSnapshot.docs.forEach(docSnap => batch.delete(docSnap.ref));
+
+    await batch.commit();
+    await deleteDoc(doc(db, projectsPath, projectId));
+}
+
+function loadProject(projectId, name) {
+    currentProjectId = projectId;
+    projectTitle.textContent = name;
+    frames = [];
+    unsubscribeFromFrames();
+
+    // Demo mode: frames are stored in-memory
+    if (isDemoMode) {
+        frames = demoFramesByProject[projectId] || [];
+        drawTimeline();
+        startPreviewLoop();
+        frameCountTotal.innerText = `${frames.length} Frames`;
+        if (frames.length > 0) {
+            const lastFrame = frames[frames.length - 1];
+            const mimeType = lastFrame.isJpeg ? 'image/jpeg' : 'image/png';
+            prevRefImg.src = `data:${mimeType};base64,${lastFrame.base64}`;
+            prevFrameRef.classList.remove('hidden');
+            compileBtn.disabled = false;
+            generateSmartSuggestions(lastFrame.base64, lastFrame.prompt, smartFocusInput.value, mimeType);
+        } else {
+            prevFrameRef.classList.add('hidden');
+            compileBtn.disabled = true;
+            quickActionsContainer.innerHTML = '<span class="text-xs text-slate-600 italic">Select a frame to get ideas...</span>';
+        }
+        showView('editor');
+        return;
+    }
+
+    const q = query(collection(db, projectsPath, projectId, 'frames'), orderBy('order'));
+    unsubscribeFromFrames = onSnapshot(q, (snapshot) => {
+        frames = [];
+        snapshot.docs.forEach(docSnap => frames.push({ id: docSnap.id, ...docSnap.data() }));
+        drawTimeline();
+        startPreviewLoop();
+        frameCountTotal.innerText = `${frames.length} Frames`;
+        if (frames.length > 0) {
+            const lastFrame = frames[frames.length - 1];
+            const mimeType = lastFrame.isJpeg ? 'image/jpeg' : 'image/png';
+            prevRefImg.src = `data:${mimeType};base64,${lastFrame.base64}`;
+            prevRefImg.parentElement.classList.remove('hidden');
+            compileBtn.disabled = false;
+            generateSmartSuggestions(lastFrame.base64, lastFrame.prompt, smartFocusInput.value, mimeType);
+        } else {
+            prevRefImg.parentElement.classList.add('hidden');
+            compileBtn.disabled = true;
+            quickActionsContainer.innerHTML = '<span class="text-xs text-slate-600 italic">Select a frame to get ideas...</span>';
+        }
+    });
+    showView('editor');
+}
+
+backToProjectsBtn.addEventListener('click', () => {
+    unsubscribeFromFrames();
+    currentProjectId = null;
+    frames = [];
+    showView('projects');
+});
+
+// --- UTILS ---
+window.appendPrompt = (text) => { promptInput.value = text; promptInput.focus(); };
+
+window.closeModal = () => {
+    downloadOverlay.classList.remove('opacity-100');
+    modalCard.classList.remove('scale-100');
+    setTimeout(() => { downloadOverlay.classList.add('hidden'); downloadOverlay.classList.remove('flex'); }, 300);
+};
+
+fpsInput.addEventListener('input', (e) => {
+    document.getElementById('fpsVal').textContent = e.target.value + " FPS";
+    startPreviewLoop();
+});
+
+window.resetApp = () => {
+    showSimpleModal('Delete all frames?', () => {
+        if (isDemoMode) {
+            if (currentProjectId && demoFramesByProject[currentProjectId]) {
+                demoFramesByProject[currentProjectId] = [];
+            }
+            frames = [];
+            frameCountTotal.innerText = '0 Frames';
+            drawTimeline();
+            startPreviewLoop();
+            prevFrameRef.classList.add('hidden');
+            compileBtn.disabled = true;
+            quickActionsContainer.innerHTML = '<span class="text-xs text-slate-600 italic">Select a frame to get ideas...</span>';
+            return;
+        }
+        async function clearFrames() {
+            const framesQuery = collection(db, projectsPath, currentProjectId, 'frames');
+            const snapshot = await getDocs(framesQuery);
+            const batch = writeBatch(db);
+            snapshot.docs.forEach(docSnap => batch.delete(docSnap.ref));
+            await batch.commit();
+            await updateDoc(doc(db, projectsPath, currentProjectId), { frameCount: 0, lastModified: serverTimestamp() });
+        }
+        clearFrames();
+    });
+};
+
+// --- PREVIEW LOOP ---
+function startPreviewLoop() {
+    if (previewInterval) clearInterval(previewInterval);
+    const enabledFrames = frames.filter(f => f.enabled).map(f => ({
+        base64: f.base64,
+        mime: f.isJpeg ? 'image/jpeg' : 'image/png'
+    }));
+    if (enabledFrames.length === 0) {
+        previewImg.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        return;
+    }
+    const fps = parseInt(fpsInput.value) || 10;
+    previewInterval = setInterval(() => {
+        previewFrameIndex = (previewFrameIndex + 1) % enabledFrames.length;
+        const frame = enabledFrames[previewFrameIndex];
+        previewImg.src = `data:${frame.mime};base64,${frame.base64}`;
+    }, 1000 / fps);
+}
+
+// --- SEQUENCE WIZARD LOGIC ---
+window.openSequenceWizard = () => {
+    sequenceModal.classList.remove('hidden');
+    sequenceModal.classList.add('flex');
+    resetSequenceWizard();
+};
+
+window.closeSequenceWizard = () => {
+    sequenceModal.classList.add('hidden');
+    sequenceModal.classList.remove('flex');
+};
+
+window.resetSequenceWizard = () => {
+    document.getElementById('seqStep1').classList.remove('hidden');
+    document.getElementById('seqStep2').classList.add('hidden');
+    document.getElementById('seqStep3').classList.add('hidden');
+    spriteSheetContainer.innerHTML = '';
+    currentSpriteSheetBase64 = null;
+    currentStoryboardId = null; // ⚠️ NEW
+    seqPrompt.value = '';
+    document.getElementById('seqGenBtn').disabled = false;
+    document.getElementById('seqGenBtn').innerText = "Generate Storyboard";
+};
+
+// ⚠️ NEW: Function to save storyboard
+async function saveStoryboard(base64, prompt) {
+    if (!currentProjectId) {
+        showSimpleModal("Error: No active project selected.");
+        return null;
+    }
+    try {
+        const docRef = await addDoc(collection(db, projectsPath, currentProjectId, "storyboards"), {
+            base64: base64,
+            prompt: prompt,
+            createdAt: serverTimestamp()
+        });
+        return docRef.id; // Return the new ID
+    } catch (e) {
+        console.error("Error saving storyboard:", e);
+        showSimpleModal("Error saving storyboard to project.");
+        return null;
+    }
+}
+
+// Phase 1: Generate Sprite Sheet
+window.generateSpriteSheet = async () => {
+    const desc = seqPrompt.value;
+    if (!desc) return showSimpleModal("Please describe the action.");
+
+    const btn = document.getElementById('seqGenBtn');
+    btn.disabled = true; btn.innerText = "Generating Storyboard...";
+
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+
+    // ⚠️ --- UPDATED, MORE DETAILED PROMPT based on user feedback --- ⚠️
+    const prompt = `You are a professional storyboard artist and technical animator. Your task is to create a highly detailed, 16-frame (4x4 grid) animation storyboard based on the user's description: "${desc}"  **CRITICAL GOAL: Show Motion** The 16 frames MUST depict a clear *sequence of motion* from start to finish. It should not be 16 static, unrelated images. The user's description is an *action*, so you must illustrate that action progressing over the 16 frames.  **Purpose:** This storyboard is a technical blueprint for a future tweening process. Its primary purpose is to capture *every single detail* of motion, color, and change. The annotations are more important than the artistic quality.  **Your storyboard MUST follow these critical instructions:** 1.  **Format:** A 4x4 grid. 16 frames total, ordered left-to-right, top-to-bottom. 2.  **Color:** **Full, Perfect Color:** You MUST capture all colors for the scene, character, and background *perfectly*. This is a full-color guide, not a sketch. 3.  **Text in Every Frame (MANDATORY):** In *every single frame*, you MUST add clear, **correctly-spelled** text annotations. This text must describe:     * The main action in that frame.     * *All* subtle actions (e.g., "Frame 7: Head tilts left," "Frame 12: Tail thumps"). 4.  **Motion Arrows (MANDATORY):** *Any* object that moves, no matter how small, MUST have arrows to show its *exact* direction of movement.     * **Curved Arrows:** For any arcing or curved motion.     * **Z-Axis (Depth) Arrows:**         * To show movement **towards the viewer (foreground)**, the arrow MUST start **skinny and become thick** at the point.         * To show movement **away from the viewer (background)**, the arrow MUST start **thick and become skinny** at the point. 5.  **Subtle Actions (MANDATORY):** Any subtle movement (e.g., eyebrow raise, finger twitch, eye shift) MUST be:     * **Circled** to show its location.     * Given an **arrow** (following the rules above) to show its direction.     * Given a **text label** to explain the movement. 6.  **Color Changes (MANDATORY):** If a color changes or pulses (e.g., a light flashes, a shirt changes hue), you MUST indicate this in *every frame it occurs*. Use a combination of:     * **Text:** (e.g., "Collar pulses RED").     * **Circles:** (circling the area of change).  **Final Warning:** This is a technical document. Do not omit any detail. Every change, every movement, every color shift must be explicitly annotated with text, circles, and arrows as described. These annotations will be removed in the final render, but they are critical for this step.`;
+    // ⚠️ --- END UPDATED PROMPT --- ⚠️
+
+    try {
+        const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: { responseModalities: ["IMAGE"] }
+            })
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        currentSpriteSheetBase64 = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+
+        if(currentSpriteSheetBase64) {
+            // ⚠️ NEW: Save storyboard to Firestore
+            currentStoryboardId = await saveStoryboard(currentSpriteSheetBase64, desc);
+            if (!currentStoryboardId) { // Handle save failure
+                btn.disabled = false; btn.innerText = "Generate Storyboard";
+                return; // Stop if we couldn't save
+            }
+
+            document.getElementById('seqStep1').classList.add('hidden');
+            document.getElementById('seqStep2').classList.remove('hidden');
+            spriteSheetContainer.innerHTML = `<img src="data:image/png;base64,${currentSpriteSheetBase64}" class="w-full h-full object-contain">`;
+        } else {
+            showSimpleModal("Generation failed. The model might be busy. Please try again.");
+        }
+    } catch(e) {
+        console.error(e);
+        showSimpleModal("Error generating storyboard: " + e.message);
+    } finally {
+        btn.disabled = false; btn.innerText = "Generate Storyboard";
+    }
+};
+
+// REBUILT PHASE 3 LOGIC
+window.processSpriteSheet = async () => {
+    // ⚠️ NEW: Check if storyboardId is set
+    if (!currentStoryboardId) {
+        showSimpleModal("Error: Storyboard ID is missing. Please re-generate storyboard.");
+        return;
+    }
+
+    document.getElementById('seqStep2').classList.add('hidden');
+    document.getElementById('seqStep3').classList.remove('hidden');
+    seqProgressBar.style.width = `0%`;
+
+    // 1. Load Sprite Sheet to Image
+    const img = new Image();
+    img.src = `data:image/png;base64,${currentSpriteSheetBase64}`;
+    await new Promise(r => img.onload = r);
+
+    // 2. Slice into 16
+    seqStatusText.innerText = "Slicing 4x4 grid...";
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const qw = img.width / 4;  // 4 quadrants wide
+    const qh = img.height / 4; // 4 quadrants tall
+    canvas.width = qw; canvas.height = qh;
+
+    const roughFrames = []; // Will hold 16 base64 PNGs
+    for(let y=0; y<4; y++) {
+        for(let x=0; x<4; x++) {
+            ctx.clearRect(0,0,qw,qh);
+            ctx.drawImage(img, x*qw, y*qh, qw, qh, 0, 0, qw, qh);
+            roughFrames.push(canvas.toDataURL('image/png').split(',')[1]);
+        }
+    }
+    seqProgressBar.style.width = `5%`; // Slicing is fast
+
+    // 3. Loop and Refine SEQUENTIALLY
+    const promptText = seqPrompt.value;
+    let previousFinalFrame_base64 = null; // This will hold the chain
+    let previousFinalFrame_mime = 'image/png';
+
+    let firstFinalFrame_base64 = null;
+    let firstFinalFrame_mime = null;
+
+    for(let i=0; i<roughFrames.length; i++) { // 16 frames
+        seqStatusText.innerText = `Refining frame ${i+1} of 16...`;
+
+        const refinedBase64_PNG = await refineRoughFrame(
+            roughFrames[i],
+            previousFinalFrame_base64,
+            previousFinalFrame_mime,
+            promptText,
+            currentSpriteSheetBase64, // Pass full storyboard for context
+            firstFinalFrame_base64,   // Pass first frame for style
+            firstFinalFrame_mime      // Pass first frame mime
+        );
+
+        if(refinedBase64_PNG) {
+            const jpegBase64 = await convertToJpeg(refinedBase64_PNG);
+
+            const framePrompt = `Sequence Frame ${i+1}/${roughFrames.length}: ${promptText}`;
+
+
+
+
+
+        // ⚠️ MODIFIED: saveFrameToTimeline now includes storyboardId
+        await saveFrameToTimeline(jpegBase64, framePrompt);
+        
+        if (i === 0) {
+            firstFinalFrame_base64 = jpegBase64;
+            firstFinalFrame_mime = 'image/jpeg';
+        }
+        
+        previousFinalFrame_base64 = jpegBase64;
+        previousFinalFrame_mime = 'image/jpeg';
+    
+    } else {
+        showSimpleModal(`Error refining frame ${i+1}. Sequence aborted.`);
+        break; 
+    }
+    seqProgressBar.style.width = `${((i+1)/roughFrames.length)*100}%`;
+}
+
+window.closeSequenceWizard();
+};
+
+// ----------------- REFINEMENT + SAVE HELPERS -----------------
+
+async function refineRoughFrame(
+    roughBase64,
+    prevFrameBase64,
+    prevFrameMime,
+    prompt,
+    fullSpriteSheetBase64,
+    firstFrameBase64,
+    firstFrameMime
+) {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+    
+    const sys = `You are a professional animator. Your job is to create a single, clean, final animation frame. You will be given up to four inputs: 1.  **[FULL_STORYBOARD]:** A 16-frame storyboard with sketches, arrows, and notes. Use this to understand the *overall motion and intent*. 2.  **[ROUGH_SKETCH]:** The *specific* sketch from the storyboard for the *current* frame. Use this as the main reference for the pose and composition. 3.  **[CHARACTER_REFERENCE] (if provided):** The *very first rendered frame* of the sequence. **Use this as the primary reference for consistent character design, color palette, and overall style throughout the entire animation.** 4.  **[PREVIOUS_FRAME] (if provided):** The final, colored frame that came *just before* this one. Use this for *immediate continuity* (e.g., ensuring the position flows smoothly from this frame).  **Your Task:** - Create the *next* frame in the sequence. - **Style/Character:** Match the \`[CHARACTER_REFERENCE]\` first and foremost. - **Pose/Action:** Match the \`[ROUGH_SKETCH]\`. - **Continuity:** Ensure the motion flows from the \`[PREVIOUS_FRAME]\`. - **Context:** Use the \`[FULL_STORYBOARD]\` to understand the motion. - **IMPORTANT:** Do NOT include any arrows, text, or grid lines from the storyboard in your final image.`;
+    
+    const userPrompt = `Render the final frame for this sketch: ${prompt}`;
+    
+    const parts = [
+        { text: sys },
+        { text: userPrompt },
+        { text: "[FULL_STORYBOARD]:" },
+        { inlineData: { mimeType: "image/png", data: fullSpriteSheetBase64 } },
+        { text: "[ROUGH_SKETCH]:" },
+        { inlineData: { mimeType: "image/png", data: roughBase64 } }
+    ];
+
+    if (firstFrameBase64) {
+        parts.push({ text: "[CHARACTER_REFERENCE]:" });
+        parts.push({ inlineData: { mimeType: firstFrameMime, data: firstFrameBase64 } });
+    }
+
+    if (prevFrameBase64) {
+        parts.push({ text: "[PREVIOUS_FRAME]:" });
+        parts.push({ inlineData: { mimeType: prevFrameMime, data: prevFrameBase64 } });
+    } else {
+        parts.push({
+            text: "[PREVIOUS_FRAME]: None. This is the first frame. Establish a clear, polished, digital art style based on the prompt."
+        });
+    }
+
+    try {
+        const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: { responseModalities: ["IMAGE"] }
+            })
+        });
+        if (!res.ok) throw new Error(res.statusText);
+        const data = await res.json();
+        return data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+    } catch (e) {
+        console.error(e);
+        return null;
+    }
+}
+
+async function convertToJpeg(pngBase64) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const c = document.createElement('canvas');
+            c.width = img.width;
+            c.height = img.height;
+            c.getContext('2d').drawImage(img, 0, 0);
+            resolve(c.toDataURL('image/jpeg', 0.8).split(',')[1]);
+        };
+        img.src = `data:image/png;base64,${pngBase64}`;
+    });
+}
+
+// ⚠️ MODIFIED: Now links the frame to its storyboard
+async function saveFrameToTimeline(base64, prompt) {
+    const newFrame = {
+        base64: base64,
+        enabled: true,
+        prompt: prompt,
+        order: Date.now(),
+        isJpeg: true,
+        storyboardId: currentStoryboardId || null // Add the link
+    };
+
+    // Demo mode: push into in-memory array
+    if (isDemoMode) {
+        if (!currentProjectId) return;
+        if (!demoFramesByProject[currentProjectId]) {
+            demoFramesByProject[currentProjectId] = [];
+        }
+        const projectFrames = demoFramesByProject[currentProjectId];
+        const id = `frame-${Date.now()}-${projectFrames.length}`;
+        const frameObj = { id, ...newFrame };
+        projectFrames.push(frameObj);
+        frames = projectFrames.slice();
+        frameCountTotal.innerText = `${frames.length} Frames`;
+        drawTimeline();
+        startPreviewLoop();
+
+        const proj = demoProjects.find((p) => p.id === currentProjectId);
+        if (proj) {
+            proj.frameCount = frames.length;
+            proj.lastModified = Date.now();
+        }
+        return;
+    }
+
+    await addDoc(collection(db, projectsPath, currentProjectId, 'frames'), newFrame);
+    await updateDoc(doc(db, projectsPath, currentProjectId), { 
+        lastModified: serverTimestamp(),
+        frameCount: frames.length + 1 
+    });
+};
+
+// --- STANDARD GENERATION ---
+generateBtn.addEventListener('click', async () => {
+    currentSelectionMode = 'append';
+    candidatesHeader.innerText = "Select Next Keyframe";
+    await generateCandidates();
+});
+
+window.onTweenClick = async (index) => {
+    currentSelectionMode = 'splice';
+    spliceIndex = index + 1; 
+    candidatesHeader.innerText = `Select Tween for ${index + 1} - ${index + 2}`;
+    
+    // ⚠️ FUTURE: This is where you would load the storyboard
+    // const frame = frames[index];
+    // if (frame.storyboardId) {
+    //     console.log("This frame belongs to storyboard:", frame.storyboardId);
+    //     // You would getDoc from /storyboards/{frame.storyboardId}
+    //     // and pass it to generateTweenFrame
+    // }
+    
+    await generateCandidates(index);
+};
+
+async function generateCandidates(tweenIndex = -1) {
+    const prompt = promptInput.value.trim();
+    if (tweenIndex === -1 && !prompt) {
+        showSimpleModal("Please enter a prompt.");
+        return;
+    }
+
+    generateBtn.disabled = true;
+    genBtnText.textContent = "Generating...";
+    candidatesGrid.innerHTML = "";
+    resetDiffControls();
+
+    // Skeleton loaders
+    for (let i = 0; i < 4; i++) {
+        const skel = document.createElement("div");
+        skel.className = "candidate-wrapper bg-slate-800 animate-pulse flex items-center justify-center";
+        skel.innerHTML =
+            '<div class="flex gap-1"><div class="w-1.5 h-1.5 bg-slate-600 rounded-full loader-dot"></div><div class="w-1.5 h-1.5 bg-slate-600 rounded-full loader-dot"></div><div class="w-1.5 h-1.5 bg-slate-600 rounded-full loader-dot"></div></div>';
+        candidatesGrid.appendChild(skel);
+    }
+
+    currentCandidates = [];
+    const baseFrame = frames.length > 0 ? frames[frames.length - 1] : null;
+    const baseImage = baseFrame ? baseFrame.base64 : null;
+    const baseMime = baseFrame ? (baseFrame.isJpeg ? "image/jpeg" : "image/png") : "image/png";
+
+    const promises = [];
+
+    if (tweenIndex > -1 && frames.length >= tweenIndex + 2) {
+        // Tween mode: generate in-between variations
+        const frameA = frames[tweenIndex];
+        const frameB = frames[tweenIndex + 1];
+        currentRefA = frameA.base64;
+        currentRefB = frameB.base64;
+        const mimeA = frameA.isJpeg ? "image/jpeg" : "image/png";
+        const mimeB = frameB.isJpeg ? "image/jpeg" : "image/png";
+        for (let i = 0; i < 4; i++) {
+            promises.push(generateTweenFrame(currentRefA, mimeA, currentRefB, mimeB));
+        }
+        setupDiffControls(true);
+        currentSelectionMode = "splice";
+        spliceIndex = tweenIndex + 1;
+        candidatesHeader.innerText = `Select Tween for ${tweenIndex + 1} - ${tweenIndex + 2}`;
+    } else {
+        // Normal append mode: generate candidate keyframes
+        currentRefA = baseImage;
+        currentRefB = null;
+        for (let i = 0; i < 4; i++) {
+            promises.push(generateKeyframe(prompt, baseImage, baseMime));
+        }
+        setupDiffControls(false);
+        currentSelectionMode = "append";
+        frameCounter.textContent = frames.length === 0 ? "First Frame" : `After Frame ${frames.length}`;
+        candidatesHeader.innerText = "Select Next Keyframe";
+    }
+
+    try {
+        const results = await Promise.all(promises);
+        candidatesGrid.innerHTML = "";
+        results.forEach((base64, idx) => {
+            if (!base64) return;
+            const wrapper = document.createElement("div");
+            wrapper.className = "candidate-wrapper group cursor-pointer";
+
+            const genImg = document.createElement("img");
+            genImg.className = "candidate-img generated-img";
+            genImg.src = `data:image/jpeg;base64,${base64}`;
+            wrapper.appendChild(genImg);
+
+            if (currentRefA) {
+                const refImg = document.createElement("img");
+                refImg.className = "candidate-img reference-img";
+                refImg.src = `data:image/jpeg;base64,${currentRefA}`;
+                wrapper.appendChild(refImg);
+            }
+
+            wrapper.addEventListener("click", () => {
+                onCandidateSelected(base64);
+            });
+
+            candidatesGrid.appendChild(wrapper);
+            currentCandidates.push({ base64, isJpeg: true });
+        });
+
+        if (currentCandidates.length === 0) {
+            candidatesGrid.innerHTML =
+                '<div class="col-span-2 h-32 flex flex-col itemscenter justify-center text-slate-500 border-2 border-dashed border-slate-800 rounded-xl text-xs">No candidates generated.</div>';
+        }
+    } catch (e) {
+        console.error("Candidate generation error:", e);
+        showSimpleModal("Error generating frames: " + (e && e.message ? e.message : e));
+    } finally {
+        generateBtn.disabled = false;
+        genBtnText.textContent = "Add Keyframe";
+    }
+}
+
+async function onCandidateSelected(base64) {
+    if (!base64) return;
+    const label =
+        currentSelectionMode === "splice"
+            ? `Tween Frame ${spliceIndex}`
+            : `Keyframe ${frames.length + 1}`;
+    const promptText = promptInput.value || label;
+    await saveFrameToTimeline(base64, promptText);
+    promptInput.value = "";
+    currentSelectionMode = "append";
+    frameCounter.textContent = "Add New Frame";
+    candidatesHeader.innerText = "Candidates";
+}
+
+// Placeholder-only generation helpers ---------------------------------------
+function createPlaceholderFrame(promptText) {
+    return new Promise((resolve) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext("2d");
+
+        // Background gradient
+        const gradient = ctx.createLinearGradient(0, 0, 512, 512);
+        gradient.addColorStop(0, "#020617");
+        gradient.addColorStop(1, "#1d4ed8");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 512, 512);
+
+        // Title text
+        ctx.fillStyle = "#e5e7eb";
+        ctx.font = "bold 32px system-ui, -apple-system, BlinkMacSystemFont, 'Inter', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("Mock Frame", 256, 210);
+
+        // Prompt snippet
+        if (promptText) {
+            ctx.font = "16px system-ui, -apple-system, BlinkMacSystemFont, 'Inter', sans-serif";
+            ctx.fillStyle = "#cbd5f5";
+            const text =
+                promptText.length > 80 ? promptText.slice(0, 77) + "..." : promptText;
+            const lines = [];
+            let line = "";
+            const words = text.split(" ");
+            for (let i = 0; i < words.length; i++) {
+                const testLine = line + words[i] + " ";
+                const metrics = ctx.measureText(testLine);
+                if (metrics.width > 420 && i > 0) {
+                    lines.push(line.trim());
+                    line = words[i] + " ";
+                } else {
+                    line = testLine;
+                }
+            }
+            if (line) lines.push(line.trim());
+            const startY = 250;
+            lines.slice(0, 3).forEach((l, idx) => {
+                ctx.fillText(l, 256, startY + idx * 22);
+            });
+        }
+
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+        resolve(dataUrl.split(",")[1]);
+    });
+}
+
+async function generateKeyframe(prompt, baseImage, baseMime) {
+    // Placeholder implementation
+    return createPlaceholderFrame(prompt || "New keyframe");
+}
+
+async function generateTweenFrame(refA, mimeA, refB, mimeB) {
+    // Placeholder tween implementation
+    return createPlaceholderFrame("Tween between frames");
+}
+
+// Diff / onion skin controls -----------------------------------------------
+function setupDiffControls(isTween) {
+    diffControls.classList.remove("hidden");
+    onionToggle.classList.remove("active");
+    tweenToggleContainer.classList.toggle("hidden", !isTween);
+    showRefA.classList.remove("active");
+    showRefB.classList.remove("active");
+}
+
+function resetDiffControls() {
+    diffControls.classList.add("hidden");
+    tweenToggleContainer.classList.add("hidden");
+    onionToggle.classList.remove("active");
+    showRefA.classList.remove("active");
+    showRefB.classList.remove("active");
+    document
+        .querySelectorAll("#candidatesGrid .candidate-wrapper")
+        .forEach((el) => {
+            el.classList.remove("diff-on");
+        });
+}
+
+function updateReferenceOverlays(which) {
+    const refBase64 = which === "B" ? currentRefB : currentRefA;
+    if (!refBase64) return;
+    document
+        .querySelectorAll("#candidatesGrid .candidate-wrapper .reference-img")
+        .forEach((img) => {
+            img.src = `data:image/jpeg;base64,${refBase64}`;
+        });
+}
+
+onionToggle.addEventListener("click", () => {
+    const active = onionToggle.classList.toggle("active");
+    document
+        .querySelectorAll("#candidatesGrid .candidate-wrapper")
+        .forEach((el) => {
+            if (active) {
+                el.classList.add("diff-on");
+            } else {
+                el.classList.remove("diff-on");
+            }
+        });
+});
+
+showRefA.addEventListener("click", () => {
+    showRefA.classList.add("active");
+    showRefB.classList.remove("active");
+    updateReferenceOverlays("A");
+});
+
+showRefB.addEventListener("click", () => {
+    showRefB.classList.add("active");
+    showRefA.classList.remove("active");
+    updateReferenceOverlays("B");
+});
+
+// Timeline rendering --------------------------------------------------------
+function drawTimeline() {
+    if (!timelineStack) return;
+
+    timelineStack.innerHTML = "";
+    if (!frames || frames.length === 0) {
+        timelineStack.innerHTML =
+            '<div class="text-center text-slate-600 text-xs py-4 italic opacity-50">No history</div>';
+        frameCounter.textContent = "Add New Frame";
+        return;
+    }
+
+    frames.forEach((frame, index) => {
+        const mimeType = frame.isJpeg ? "image/jpeg" : "image/png";
+
+        const row = document.createElement("div");
+        row.className =
+            "flex items-center justify-between gap-2 mb-2 bg-slate-800/60 border border-slate-700 rounded-lg px-2 py-1.5";
+
+        const left = document.createElement("div");
+        left.className = "flex items-center gap-2";
+
+        const thumb = document.createElement("img");
+        thumb.className = "w-10 h-10 rounded-md object-cover border border-slate-700";
+        thumb.src = `data:${mimeType};base64,${frame.base64}`;
+        left.appendChild(thumb);
+
+        const meta = document.createElement("div");
+        meta.className = "flex flex-col";
+        const title = document.createElement("div");
+        title.className = "text-[10px] font-bold text-slate-200";
+        title.textContent = `Frame ${index + 1}`;
+        const subtitle = document.createElement("div");
+        subtitle.className =
+            "text-[10px] text-slate-400 truncate max-w-[150px]";
+        subtitle.textContent = frame.prompt || "";
+        meta.appendChild(title);
+        meta.appendChild(subtitle);
+
+        left.appendChild(meta);
+        row.appendChild(left);
+
+        const right = document.createElement("div");
+        right.className = "flex flex-col items-end gap-1";
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.className = `text-[9px] px-2 py-0.5 rounded-full border ${
+            frame.enabled
+                ? "bg-emerald-500/20 border-emerald-500/60 text-emerald-300"
+                : "bg-slate-900 border-slate-600 text-slate-400"
+        }`;
+        toggleBtn.textContent = frame.enabled ? "On" : "Off";
+        toggleBtn.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+
+            if (isDemoMode) {
+                frame.enabled = !frame.enabled;
+                drawTimeline();
+                startPreviewLoop();
+                return;
+            }
+
+            try {
+                await updateDoc(
+                    doc(
+                        db,
+                        projectsPath,
+                        currentProjectId,
+                        'frames',
+                        frame.id
+                    ),
+                    {
+                        enabled: !frame.enabled
+                    }
+                );
+            } catch (e) {
+                console.error('Toggle frame error:', e);
+                showSimpleModal(
+                    'Error updating frame: ' +
+                        (e && e.message ? e.message : e)
+                );
+            }
+        });
+        right.appendChild(toggleBtn);
+
+        if (index < frames.length - 1) {
+            const tweenBtn = document.createElement("button");
+            tweenBtn.className = "tween-btn";
+            tweenBtn.textContent = "Tween →";
+            tweenBtn.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                window.onTweenClick(index);
+            });
+            right.appendChild(tweenBtn);
+        }
+
+        row.appendChild(right);
+
+        row.addEventListener("click", () => {
+            const mime = frame.isJpeg ? "image/jpeg" : "image/png";
+            prevRefImg.src = `data:${mime};base64,${frame.base64}`;
+            prevFrameRef.classList.remove("hidden");
+            generateSmartSuggestions(
+                frame.base64,
+                frame.prompt,
+                smartFocusInput.value,
+                mime
+            );
+            frameCounter.textContent = `After Frame ${index + 1}`;
+        });
+
+        timelineStack.appendChild(row);
+    });
+}
+
+// Suggestion chips ----------------------------------------------------------
+function generateSmartSuggestions(imageBase64, lastPrompt, focus, mimeType) {
+    quickActionsContainer.innerHTML = "";
+
+    const base = lastPrompt || "the motion";
+    const focusLabel = focus ? ` the ${focus}` : " the subject";
+
+    const suggestions = [
+        `Make ${base} more dramatic by exaggerating${focus ? " " + focus : " motion"}.`,
+        `Slow down the action and emphasize${focusLabel}.`,
+        `Add a secondary motion (like hair or fabric) following the main move.`
+    ];
+
+    suggestions.forEach((text) => {
+        const btn = document.createElement("button");
+        btn.className = "suggestion-btn";
+        btn.textContent = text;
+        btn.addEventListener("click", () => {
+            appendPrompt(text);
+        });
+        quickActionsContainer.appendChild(btn);
+    });
+}
+
+refreshSuggestions.addEventListener("click", () => {
+    if (!frames || frames.length === 0) {
+        showSimpleModal("Add at least one frame to get suggestions.");
+        return;
+    }
+    const lastFrame = frames[frames.length - 1];
+    const mimeType = lastFrame.isJpeg ? "image/jpeg" : "image/png";
+    generateSmartSuggestions(
+        lastFrame.base64,
+        lastFrame.prompt,
+        smartFocusInput.value,
+        mimeType
+    );
+});
+
+// Simple modal helper -------------------------------------------------------
+function showSimpleModal(message, onConfirm) {
+    if (typeof onConfirm === "function") {
+        const ok = window.confirm(message);
+        if (ok) onConfirm();
+    } else {
+        window.alert(message);
+    }
+}
+
+// GIF export ----------------------------------------------------------------
+compileBtn.addEventListener("click", async () => {
+    try {
+        if (!frames || frames.length === 0) {
+            showSimpleModal("No frames to export.");
+            return;
+        }
+        const activeFrames = frames.filter((f) => f.enabled);
+        if (activeFrames.length === 0) {
+            showSimpleModal("All frames are disabled. Enable at least one frame.");
+            return;
+        }
+        if (typeof window.GIF === "undefined") {
+            showSimpleModal("GIF.js library is not available.");
+            return;
+        }
+
+        const fps = parseInt(fpsInput.value, 10) || 10;
+        const delay = Math.max(20, Math.floor(1000 / fps));
+
+        const gif = new window.GIF({
+            workers: 2,
+            quality: 10,
+            workerScript:
+                "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js"
+        });
+
+        const addFramePromises = activeFrames.map((frame) => {
+            return new Promise((resolve) => {
+                const img = new Image();
+                const mimeType = frame.isJpeg ? "image/jpeg" : "image/png";
+                img.onload = () => {
+                    gif.addFrame(img, { delay, copy: true });
+                    resolve();
+                };
+                img.src = `data:${mimeType};base64,${frame.base64}`;
+            });
+        });
+
+        await Promise.all(addFramePromises);
+
+        downloadOverlay.classList.remove("hidden");
+        downloadOverlay.classList.add("flex");
+        // small timeout so the transition can apply
+        setTimeout(() => {
+            downloadOverlay.classList.add("opacity-100");
+            modalCard.classList.add("scale-100");
+        }, 10);
+
+        gif.on("finished", (blob) => {
+            const url = URL.createObjectURL(blob);
+            const imgEl = document.getElementById("finalGifPreview");
+            const linkEl = document.getElementById("dlLink");
+            imgEl.src = url;
+            linkEl.href = url;
+            linkEl.download = "motion-studio.gif";
+        });
+
+        gif.render();
+    } catch (e) {
+        console.error("GIF export error:", e);
+        showSimpleModal(
+            "Error exporting GIF: " + (e && e.message ? e.message : e)
+        );
+    }
+});
+
+// Kick off Firebase / project loading on startup ----------------------------
+initializeAppWithAuth();
+
+</script>
+</body>
+</html>
