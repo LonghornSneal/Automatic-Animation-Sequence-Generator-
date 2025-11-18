@@ -424,63 +424,94 @@
             newProjectBtn.disabled = true;
         }
 
-        // --- AUTH & INIT ---
-        async function initializeAppWithAuth() {
-            try {
-                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-gif-studio';
-                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        function validateFirebaseConfig() {
+            const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+            if (!rawConfig) {
+                showLoaderError('Firebase config (__firebase_config) was not injected.');
+                return null;
+            }
 
-                // If there is no Firebase config, fall back to a local in-memory demo mode
-                if (!firebaseConfig.apiKey) {
-                    isDemoMode = true;
-                    projectsPath = 'demo-local';
-                    loaderMessage.innerHTML = `
-                        <div class="text-xs text-slate-300">
-                            Demo mode: no backend configured. Projects are stored in memory and reset on refresh.
-                        </div>
-                    `;
-                    newProjectBtn.disabled = false;
-                    loadProjectList();   // will use demo implementation
-                    showView('projects');
-                    return;
-                }
+            try {
+                const parsed = JSON.parse(rawConfig);
+                const requiredKeys = ['apiKey', 'authDomain', 'projectId'];
+                const missing = requiredKeys.filter((key) => !parsed[key]);
 
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
+                if (missing.length) {
+                    showLoaderError(`Firebase config is missing required fields: ${missing.join(', ')}`);
+                    return null;
+                }
 
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        if (userId) return;
-                        userId = user.uid;
-                        projectsPath = `/artifacts/${appId}/users/${userId}/gif_projects`;
-                        newProjectBtn.disabled = false;
-                        loadProjectList();
-                        showView('projects');
-                    }
-                });
+                return parsed;
+            } catch (err) {
+                console.error('Failed to parse __firebase_config', err);
+                showLoaderError('Invalid Firebase config JSON.');
+                return null;
+            }
+        }
 
-                if (!auth.currentUser) {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                } else if (!userId) {
-                    userId = auth.currentUser.uid;
-                    projectsPath = `/artifacts/${appId}/users/${userId}/gif_projects`;
-                    newProjectBtn.disabled = false;
-                    loadProjectList();
-                    showView('projects');
-                }
-            } catch (e) {
-                console.error('Firebase Init Error:', e);
-                if (!isDemoMode) {
-                    showLoaderError('Error loading app. Check console.');
-                }
-            }
-        }
+        async function ensureAuthenticated(initialAuthToken) {
+            if (auth.currentUser) return auth.currentUser;
+
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                return auth.currentUser;
+            } catch (err) {
+                console.error('Authentication error', err);
+                const anonymousDisabled = err?.code === 'auth/operation-not-allowed';
+                if (initialAuthToken) {
+                    showLoaderError('Unable to sign in with the provided session token. Please refresh or re-authenticate.');
+                } else if (anonymousDisabled) {
+                    showLoaderError('Anonymous auth is disabled. Please provide a valid __initial_auth_token for the session.');
+                } else {
+                    showLoaderError('Sign-in failed. Please try again or provide a session token.');
+                }
+                throw err;
+            }
+        }
+
+        // --- AUTH & INIT ---
+        async function initializeAppWithAuth() {
+            try {
+                const firebaseConfig = validateFirebaseConfig();
+                if (!firebaseConfig) return;
+
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-gif-studio';
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        if (userId) return;
+                        userId = user.uid;
+                        projectsPath = `/artifacts/${appId}/users/${userId}/gif_projects`;
+                        newProjectBtn.disabled = false;
+                        loadProjectList();
+                        showView('projects');
+                    }
+                });
+
+                const user = await ensureAuthenticated(initialAuthToken);
+                if (user && !userId) {
+                    userId = user.uid;
+                    projectsPath = `/artifacts/${appId}/users/${userId}/gif_projects`;
+                    newProjectBtn.disabled = false;
+                    loadProjectList();
+                    showView('projects');
+                }
+            } catch (e) {
+                console.error('Firebase Init Error:', e);
+                if (!isDemoMode) {
+                    showLoaderError('Error loading app. Check console.');
+                }
+            }
+        }
 
 
 
