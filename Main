@@ -245,15 +245,14 @@
         <div class="flex-grow overflow-y-auto p-6 flex flex-col items-center">
             
             <!-- Step 1: Describe -->
-            <div id="seqStep1" class="w-full max-w-md space-y-4">
-                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
-                    <label class="text-xs text-slate-400 font-bold uppercase mb-2 block">Describe the Action</label>
-                    <textarea id="seqPrompt" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-sm h-24" placeholder="e.g. A cat jumping over a fence, side view"></textarea>
-                    <!-- ⚠️ MODIFIED TEXT HERE ⚠️ -->
-                    <p class="text-[10px] text-slate-500 mt-2">The AI will generate a detailed, full-color 16-frame storyboard with annotations, arrows, and focus circles to plan the motion.</p>
-                </div>
-                <button onclick="generateSpriteSheet()" id="seqGenBtn" class="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-lg">Generate Storyboard</button>
-            </div>
+            <div id="seqStep1" class="w-full max-w-md space-y-4">
+                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                    <label class="text-xs text-slate-400 font-bold uppercase mb-2 block">Describe the Action</label>
+                    <textarea id="seqPrompt" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white text-sm h-24" placeholder="e.g. A cat jumping over a fence, side view"></textarea>
+                    <p class="text-[10px] text-slate-500 mt-2">The AI will generate a detailed, full-color 16-frame storyboard with annotations, arrows, and focus circles to plan the motion.</p>
+                </div>
+                <button onclick="generateSpriteSheet()" id="seqGenBtn" class="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-lg">Generate Storyboard</button>
+            </div>
 
             <!-- Step 2: Review Rough -->
             <div id="seqStep2" class="w-full max-w-md space-y-4 hidden">
@@ -327,21 +326,11 @@
             writeBatch
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // -----------------------------------------------------------------
-        // ⚠️ NOTE ON API KEY:
-        // This 'apiKey' is left empty ("") on purpose.
-        // Our collaborative environment automatically supplies a key.
-        // If hosting externally, paste your Google AI API key here.
-        // -----------------------------------------------------------------
-        const apiKey = "";
-        // -----------------------------------------------------------------
-
-
-        // --- GLOBAL STATE ---
-        let db, auth, appId, userId, projectsPath;
-        let frames = [];
-        let currentProjectId = null;
-        let unsubscribeFromFrames = () => {};
+        // --- GLOBAL STATE ---
+        let db, auth, appId, userId, projectsPath;
+        let frames = [];
+        let currentProjectId = null;
+        let unsubscribeFromFrames = () => {};
         
         let currentCandidates = [];
         let previewInterval = null;
@@ -356,10 +345,18 @@
         let demoProjects = [];              // [{id, name, createdAt, lastModified, frameCount}]
         let demoFramesByProject = {};       // { [projectId]: [frameObjects] }
 
-        // Sequence State
-        let currentSpriteSheetBase64 = null;
-        let currentStoryboardId = null; // ⚠️ NEW: To link frames to their storyboard
-        
+        // Sequence State
+        let currentSpriteSheetBase64 = null;
+        let currentStoryboardId = null; // Link frames to their storyboard
+        
+        // --- OPENAI CONFIG ---
+        // Expected: inject __openai_api_key or set OPENAI_API_KEY globally at runtime.
+        // If missing, requests will fail fast with a user-visible error.
+        const openaiApiKey =
+            (typeof __openai_api_key !== 'undefined' && __openai_api_key) ||
+            (typeof OPENAI_API_KEY !== 'undefined' && OPENAI_API_KEY) ||
+            '';
+
         // --- DOM ---
         const projectScreen = document.getElementById('projectScreen');
         const editorScreen = document.getElementById('editorScreen');
@@ -397,8 +394,49 @@
         const sequenceModal = document.getElementById('sequenceModal');
         const seqPrompt = document.getElementById('seqPrompt');
         const spriteSheetContainer = document.getElementById('spriteSheetContainer');
-        const seqStatusText = document.getElementById('seqStatusText');
-        const seqProgressBar = document.getElementById('seqProgressBar');
+        const seqStatusText = document.getElementById('seqStatusText');
+        const seqProgressBar = document.getElementById('seqProgressBar');
+
+        // --- HELPERS ---
+        function ensureOpenAiKey() {
+            if (openaiApiKey) return true;
+            const message = 'OpenAI API key is missing. Set __openai_api_key or OPENAI_API_KEY before generating images.';
+            showSimpleModal(message);
+            throw new Error(message);
+        }
+
+        async function openaiImageRequest({ endpoint, body, isMultipart = false }) {
+            ensureOpenAiKey();
+            const headers = { Authorization: `Bearer ${openaiApiKey}` };
+            const fetchBody = isMultipart ? body : JSON.stringify(body);
+            if (!isMultipart) headers['Content-Type'] = 'application/json';
+
+            const res = await fetch(`https://api.openai.com/v1${endpoint}`, {
+                method: 'POST',
+                headers,
+                body: fetchBody
+            });
+
+            const text = await res.text();
+            if (!res.ok) {
+                throw new Error(`OpenAI error (${res.status}): ${text || res.statusText}`);
+            }
+            try {
+                return JSON.parse(text);
+            } catch (err) {
+                throw new Error('Failed to parse OpenAI response.');
+            }
+        }
+
+        function base64ToBlob(base64, mime = 'image/png') {
+            const byteCharacters = atob(base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            return new Blob([byteArray], { type: mime });
+        }
 
         // --- VIEW MANAGEMENT ---
         function showView(viewName) {
@@ -516,34 +554,39 @@
 
 
 
-// --- PROJECT MANAGEMENT ---        
-// ⚠️ REVERTED this function to the user's original, as requested.
-async function loadProjectList() {
-    if (!projectsPath) return;  
+// --- PROJECT MANAGEMENT ---         
+function renderProjectCard(projectId, name, frameCount) {
+    const el = document.createElement('div');
+    el.className = 'bg-slate-800 p-4 rounded-lg border border-slate-700 flex justify-between items-center cursor-pointer hover:bg-slate-700 transition';
+    el.onclick = () => loadProject(projectId, name);
+    el.innerHTML = `
+        <div>
+            <div class="font-bold text-white">${name}</div>
+            <div class="text-xs text-slate-400">${frameCount || 0} frames</div>
+        </div>
+        <i class="fas fa-chevron-right text-slate-500"></i>
+    `;
+    return el;
+}
 
-    // Demo mode: pure in-memory projects
-    if (isDemoMode) {
-        if (!demoProjects.length) {
-            projectListContainer.innerHTML = `<div class="text-center text-slate-500 py-10">No projects yet. Click "Start New Project" to begin (demo mode).</div>`;
-            return;
-        }
-        const docs = [...demoProjects].sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
-        projectListContainer.innerHTML = '';
-        docs.forEach((project) => {
-            const el = document.createElement('div');
-            el.className = 'bg-slate-800 p-4 rounded-lg border border-slate-700 flex justify-between items-center cursor-pointer hover:bg-slate-700 transition';
-            el.onclick = () => loadProject(project.id, project.name);
-            el.innerHTML = `
-                <div>
-                    <div class="font-bold text-white">${project.name}</div>
-                    <div class="text-xs text-slate-400">${project.frameCount || 0} frames</div>
-                </div>
-                <i class="fas fa-chevron-right text-slate-500"></i>
-            `;
-            projectListContainer.appendChild(el);
-        });
-        return;
-    }
+async function loadProjectList() {
+    if (!projectsPath) return;  
+
+    // Demo mode: pure in-memory projects
+    if (isDemoMode) {
+        if (!demoProjects.length) {
+            projectListContainer.innerHTML = `<div class="text-center text-slate-500 py-10">No projects yet. Click "Start New Project" to begin (demo mode).</div>`;
+            return;
+        }
+        const docs = [...demoProjects].sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+        projectListContainer.innerHTML = '';
+        docs.forEach((project) => {
+            projectListContainer.appendChild(
+                renderProjectCard(project.id, project.name, project.frameCount)
+            );
+        });
+        return;
+    }
 
     loaderMessage.innerHTML = `<i class="fas fa-spinner animate-spin text-2xl"></i><p class="mt-2 text-sm">Loading projects...</p>`;
     const q = query(collection(db, projectsPath));
@@ -552,25 +595,17 @@ async function loadProjectList() {
         if (snapshot.empty) {
             projectListContainer.innerHTML = `<div class="text-center text-slate-500 py-10">No projects yet.</div>`;
             return;
-        }
-        const docs = snapshot.docs;
-        docs.sort((a, b) => (b.data().lastModified?.toDate() || new Date(0)) - (a.data().lastModified?.toDate() || new Date(0)));
-        projectListContainer.innerHTML = '';
-        docs.forEach(docSnap => {
-            const project = docSnap.data();
-            const el = document.createElement('div');
-            el.className = 'bg-slate-800 p-4 rounded-lg border border-slate-700 flex justify-between items-center cursor-pointer hover:bg-slate-700 transition';
-            el.onclick = () => loadProject(docSnap.id, project.name);
-            el.innerHTML = `
-                <div>
-                    <div class="font-bold text-white">${project.name}</div>
-                    <div class="text-xs text-slate-400">${project.frameCount || 0} frames</div>
-                </div>
-                <i class="fas fa-chevron-right text-slate-500"></i>
-            `;
-            projectListContainer.appendChild(el);
-        });
-    });
+        }
+        const docs = snapshot.docs;
+        docs.sort((a, b) => (b.data().lastModified?.toDate() || new Date(0)) - (a.data().lastModified?.toDate() || new Date(0)));
+        projectListContainer.innerHTML = '';
+        docs.forEach(docSnap => {
+            const project = docSnap.data();
+            projectListContainer.appendChild(
+                renderProjectCard(docSnap.id, project.name, project.frameCount)
+            );
+        });
+    });
 }
 
 newProjectBtn.addEventListener('click', async () => {
@@ -640,7 +675,7 @@ async function deleteProject(projectId) {
         return;
     }
 
-    // ⚠️ NEW: Delete storyboards when deleting project
+    // Delete storyboards when deleting project
     const storyboardsQuery = collection(db, projectsPath, projectId, 'storyboards');
     const storyboardsSnapshot = await getDocs(storyboardsQuery);
     const batch = writeBatch(db);
@@ -715,15 +750,47 @@ backToProjectsBtn.addEventListener('click', () => {
 // --- UTILS ---
 window.appendPrompt = (text) => { promptInput.value = text; promptInput.focus(); };
 
+function toggleOverlay(element, show, options = {}) {
+    const {
+        displayClass = 'flex',
+        activeClasses = [],
+        animationDelay = 220,
+        onShow,
+        onHide
+    } = options;
+
+    if (show) {
+        element.classList.remove('hidden');
+        element.classList.add(displayClass);
+        requestAnimationFrame(() => {
+            activeClasses.forEach((cls) => element.classList.add(cls));
+            if (typeof onShow === 'function') onShow();
+        });
+    } else {
+        activeClasses.forEach((cls) => element.classList.remove(cls));
+        if (typeof onHide === 'function') onHide();
+        setTimeout(() => {
+            element.classList.add('hidden');
+            element.classList.remove(displayClass);
+        }, activeClasses.length ? animationDelay : 0);
+    }
+}
+
+function getEnabledFrames() {
+    return (frames || []).filter((f) => f.enabled);
+}
+
 window.closeModal = () => {
-    downloadOverlay.classList.remove('opacity-100');
-    modalCard.classList.remove('scale-100');
-    setTimeout(() => { downloadOverlay.classList.add('hidden'); downloadOverlay.classList.remove('flex'); }, 300);
+    toggleOverlay(downloadOverlay, false, {
+        activeClasses: ['opacity-100'],
+        animationDelay: 300,
+        onHide: () => modalCard.classList.remove('scale-100')
+    });
 };
 
 fpsInput.addEventListener('input', (e) => {
-    document.getElementById('fpsVal').textContent = e.target.value + " FPS";
-    startPreviewLoop();
+    document.getElementById('fpsVal').textContent = e.target.value + " FPS";
+    startPreviewLoop();
 });
 
 window.resetApp = () => {
@@ -755,48 +822,54 @@ window.resetApp = () => {
 
 // --- PREVIEW LOOP ---
 function startPreviewLoop() {
-    if (previewInterval) clearInterval(previewInterval);
-    const enabledFrames = frames.filter(f => f.enabled).map(f => ({
-        base64: f.base64,
-        mime: f.isJpeg ? 'image/jpeg' : 'image/png'
-    }));
-    if (enabledFrames.length === 0) {
-        previewImg.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-        return;
-    }
-    const fps = parseInt(fpsInput.value) || 10;
-    previewInterval = setInterval(() => {
-        previewFrameIndex = (previewFrameIndex + 1) % enabledFrames.length;
-        const frame = enabledFrames[previewFrameIndex];
-        previewImg.src = `data:${frame.mime};base64,${frame.base64}`;
-    }, 1000 / fps);
+    if (previewInterval) clearInterval(previewInterval);
+    const playableFrames = getEnabledFrames().map(f => ({
+        base64: f.base64,
+        mime: f.isJpeg ? 'image/jpeg' : 'image/png'
+    }));
+    if (playableFrames.length === 0) {
+        previewImg.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        return;
+    }
+    const fps = parseInt(fpsInput.value) || 10;
+    previewInterval = setInterval(() => {
+        previewFrameIndex = (previewFrameIndex + 1) % playableFrames.length;
+        const frame = playableFrames[previewFrameIndex];
+        previewImg.src = `data:${frame.mime};base64,${frame.base64}`;
+    }, 1000 / fps);
 }
 
 // --- SEQUENCE WIZARD LOGIC ---
+function setSeqStep(step) {
+    const stepIds = ['seqStep1', 'seqStep2', 'seqStep3'];
+    stepIds.forEach((id, idx) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (idx === step - 1) el.classList.remove('hidden');
+        else el.classList.add('hidden');
+    });
+}
+
 window.openSequenceWizard = () => {
-    sequenceModal.classList.remove('hidden');
-    sequenceModal.classList.add('flex');
-    resetSequenceWizard();
+    toggleOverlay(sequenceModal, true);
+    resetSequenceWizard();
 };
 
 window.closeSequenceWizard = () => {
-    sequenceModal.classList.add('hidden');
-    sequenceModal.classList.remove('flex');
+    toggleOverlay(sequenceModal, false);
 };
 
 window.resetSequenceWizard = () => {
-    document.getElementById('seqStep1').classList.remove('hidden');
-    document.getElementById('seqStep2').classList.add('hidden');
-    document.getElementById('seqStep3').classList.add('hidden');
-    spriteSheetContainer.innerHTML = '';
-    currentSpriteSheetBase64 = null;
-    currentStoryboardId = null; // ⚠️ NEW
-    seqPrompt.value = '';
-    document.getElementById('seqGenBtn').disabled = false;
-    document.getElementById('seqGenBtn').innerText = "Generate Storyboard";
+    setSeqStep(1);
+    spriteSheetContainer.innerHTML = '';
+    currentSpriteSheetBase64 = null;
+    currentStoryboardId = null;
+    seqPrompt.value = '';
+    document.getElementById('seqGenBtn').disabled = false;
+    document.getElementById('seqGenBtn').innerText = "Generate Storyboard";
 };
 
-// ⚠️ NEW: Function to save storyboard
+// Save storyboard base64 + prompt for reuse
 async function saveStoryboard(base64, prompt) {
     if (!currentProjectId) {
         showSimpleModal("Error: No active project selected.");
@@ -818,46 +891,41 @@ async function saveStoryboard(base64, prompt) {
 
 // Phase 1: Generate Sprite Sheet
 window.generateSpriteSheet = async () => {
-    const desc = seqPrompt.value;
-    if (!desc) return showSimpleModal("Please describe the action.");
+    const desc = seqPrompt.value;
+    if (!desc) return showSimpleModal("Please describe the action.");
 
-    const btn = document.getElementById('seqGenBtn');
-    btn.disabled = true; btn.innerText = "Generating Storyboard...";
+    const btn = document.getElementById('seqGenBtn');
+    btn.disabled = true; btn.innerText = "Generating Storyboard...";
 
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+    const prompt = `You are a professional storyboard artist and technical animator. Your task is to create a highly detailed, 16-frame (4x4 grid) animation storyboard based on the user's description: "${desc}"  **CRITICAL GOAL: Show Motion** The 16 frames MUST depict a clear *sequence of motion* from start to finish. It should not be 16 static, unrelated images. The user's description is an *action*, so you must illustrate that action progressing over the 16 frames.  **Purpose:** This storyboard is a technical blueprint for a future tweening process. Its primary purpose is to capture *every single detail* of motion, color, and change. The annotations are more important than the artistic quality.  **Your storyboard MUST follow these critical instructions:** 1.  **Format:** A 4x4 grid. 16 frames total, ordered left-to-right, top-to-bottom. 2.  **Color:** **Full, Perfect Color:** You MUST capture all colors for the scene, character, and background *perfectly*. This is a full-color guide, not a sketch. 3.  **Text in Every Frame (MANDATORY):** In *every single frame*, you MUST add clear, **correctly-spelled** text annotations. This text must describe:     * The main action in that frame.     * *All* subtle actions (e.g., "Frame 7: Head tilts left," "Frame 12: Tail thumps"). 4.  **Motion Arrows (MANDATORY):** *Any* object that moves, no matter how small, MUST have arrows to show its *exact* direction of movement.     * **Curved Arrows:** For any arcing or curved motion.     * **Z-Axis (Depth) Arrows:**         * To show movement **towards the viewer (foreground)**, the arrow MUST start **skinny and become thick** at the point.         * To show movement **away from the viewer (background)**, the arrow MUST start **thick and become skinny** at the point. 5.  **Subtle Actions (MANDATORY):** Any subtle movement (e.g., eyebrow raise, finger twitch, eye shift) MUST be:     * **Circled** to show its location.     * Given an **arrow** (following the rules above) to show its direction.     * Given a **text label** to explain the movement. 6.  **Color Changes (MANDATORY):** If a color changes or pulses (e.g., a light flashes, a shirt changes hue), you MUST indicate this in *every frame it occurs*. Use a combination of:     * **Text:** (e.g., "Collar pulses RED").     * **Circles:** (circling the area of change).  **Final Warning:** This is a technical document. Do not omit any detail. Every change, every movement, every color shift must be explicitly annotated with text, circles, and arrows as described. These annotations will be removed in the final render, but they are critical for this step.`;
 
-    // ⚠️ --- UPDATED, MORE DETAILED PROMPT based on user feedback --- ⚠️
-    const prompt = `You are a professional storyboard artist and technical animator. Your task is to create a highly detailed, 16-frame (4x4 grid) animation storyboard based on the user's description: "${desc}"  **CRITICAL GOAL: Show Motion** The 16 frames MUST depict a clear *sequence of motion* from start to finish. It should not be 16 static, unrelated images. The user's description is an *action*, so you must illustrate that action progressing over the 16 frames.  **Purpose:** This storyboard is a technical blueprint for a future tweening process. Its primary purpose is to capture *every single detail* of motion, color, and change. The annotations are more important than the artistic quality.  **Your storyboard MUST follow these critical instructions:** 1.  **Format:** A 4x4 grid. 16 frames total, ordered left-to-right, top-to-bottom. 2.  **Color:** **Full, Perfect Color:** You MUST capture all colors for the scene, character, and background *perfectly*. This is a full-color guide, not a sketch. 3.  **Text in Every Frame (MANDATORY):** In *every single frame*, you MUST add clear, **correctly-spelled** text annotations. This text must describe:     * The main action in that frame.     * *All* subtle actions (e.g., "Frame 7: Head tilts left," "Frame 12: Tail thumps"). 4.  **Motion Arrows (MANDATORY):** *Any* object that moves, no matter how small, MUST have arrows to show its *exact* direction of movement.     * **Curved Arrows:** For any arcing or curved motion.     * **Z-Axis (Depth) Arrows:**         * To show movement **towards the viewer (foreground)**, the arrow MUST start **skinny and become thick** at the point.         * To show movement **away from the viewer (background)**, the arrow MUST start **thick and become skinny** at the point. 5.  **Subtle Actions (MANDATORY):** Any subtle movement (e.g., eyebrow raise, finger twitch, eye shift) MUST be:     * **Circled** to show its location.     * Given an **arrow** (following the rules above) to show its direction.     * Given a **text label** to explain the movement. 6.  **Color Changes (MANDATORY):** If a color changes or pulses (e.g., a light flashes, a shirt changes hue), you MUST indicate this in *every frame it occurs*. Use a combination of:     * **Text:** (e.g., "Collar pulses RED").     * **Circles:** (circling the area of change).  **Final Warning:** This is a technical document. Do not omit any detail. Every change, every movement, every color shift must be explicitly annotated with text, circles, and arrows as described. These annotations will be removed in the final render, but they are critical for this step.`;
-    // ⚠️ --- END UPDATED PROMPT --- ⚠️
+    try {
+        const response = await openaiImageRequest({
+            endpoint: '/images/generations',
+            body: {
+                model: 'gpt-image-1',
+                prompt,
+                response_format: 'b64_json',
+                size: '1024x1024',
+                n: 1
+            }
+        });
 
-    try {
-        const res = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { responseModalities: ["IMAGE"] }
-            })
-        });
-        if (!res.ok) throw new Error(res.statusText);
-        const data = await res.json();
-        currentSpriteSheetBase64 = data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+        currentSpriteSheetBase64 = response?.data?.[0]?.b64_json;
 
-        if(currentSpriteSheetBase64) {
-            // ⚠️ NEW: Save storyboard to Firestore
-            currentStoryboardId = await saveStoryboard(currentSpriteSheetBase64, desc);
-            if (!currentStoryboardId) { // Handle save failure
-                btn.disabled = false; btn.innerText = "Generate Storyboard";
-                return; // Stop if we couldn't save
-            }
+        if(currentSpriteSheetBase64) {
+            currentStoryboardId = await saveStoryboard(currentSpriteSheetBase64, desc);
+            if (!currentStoryboardId) { // Handle save failure
+                btn.disabled = false; btn.innerText = "Generate Storyboard";
+                return; // Stop if we couldn't save
+            }
 
-            document.getElementById('seqStep1').classList.add('hidden');
-            document.getElementById('seqStep2').classList.remove('hidden');
-            spriteSheetContainer.innerHTML = `<img src="data:image/png;base64,${currentSpriteSheetBase64}" class="w-full h-full object-contain">`;
-        } else {
-            showSimpleModal("Generation failed. The model might be busy. Please try again.");
-        }
-    } catch(e) {
+            setSeqStep(2);
+            spriteSheetContainer.innerHTML = `<img src="data:image/png;base64,${currentSpriteSheetBase64}" class="w-full h-full object-contain">`;
+        } else {
+            showSimpleModal("Generation failed. The model might be busy. Please try again.");
+        }
+    } catch(e) {
         console.error(e);
         showSimpleModal("Error generating storyboard: " + e.message);
     } finally {
@@ -865,17 +933,15 @@ window.generateSpriteSheet = async () => {
     }
 };
 
-// REBUILT PHASE 3 LOGIC
+// Process storyboard into final frames
 window.processSpriteSheet = async () => {
-    // ⚠️ NEW: Check if storyboardId is set
-    if (!currentStoryboardId) {
-        showSimpleModal("Error: Storyboard ID is missing. Please re-generate storyboard.");
-        return;
-    }
+    if (!currentStoryboardId) {
+        showSimpleModal("Error: Storyboard ID is missing. Please re-generate storyboard.");
+        return;
+    }
 
-    document.getElementById('seqStep2').classList.add('hidden');
-    document.getElementById('seqStep3').classList.remove('hidden');
-    seqProgressBar.style.width = `0%`;
+    setSeqStep(3);
+    seqProgressBar.style.width = `0%`;
 
     // 1. Load Sprite Sheet to Image
     const img = new Image();
@@ -900,51 +966,40 @@ window.processSpriteSheet = async () => {
     }
     seqProgressBar.style.width = `5%`; // Slicing is fast
 
-    // 3. Loop and Refine SEQUENTIALLY
-    const promptText = seqPrompt.value;
-    let previousFinalFrame_base64 = null; // This will hold the chain
-    let previousFinalFrame_mime = 'image/png';
+    // 3. Loop and Refine SEQUENTIALLY
+    const promptText = seqPrompt.value;
+    let previousFinalFrame_base64 = null; // This will hold the chain
 
-    let firstFinalFrame_base64 = null;
-    let firstFinalFrame_mime = null;
+    let firstFinalFrame_base64 = null;
 
-    for(let i=0; i<roughFrames.length; i++) { // 16 frames
-        seqStatusText.innerText = `Refining frame ${i+1} of 16...`;
+    for(let i=0; i<roughFrames.length; i++) { // 16 frames
+        seqStatusText.innerText = `Refining frame ${i+1} of 16...`;
 
-        const refinedBase64_PNG = await refineRoughFrame(
-            roughFrames[i],
-            previousFinalFrame_base64,
-            previousFinalFrame_mime,
-            promptText,
-            currentSpriteSheetBase64, // Pass full storyboard for context
-            firstFinalFrame_base64,   // Pass first frame for style
-            firstFinalFrame_mime      // Pass first frame mime
-        );
+        const refinedBase64_PNG = await refineRoughFrame(
+            roughFrames[i],
+            previousFinalFrame_base64,
+            promptText,
+            currentSpriteSheetBase64, // Pass full storyboard for context
+            firstFinalFrame_base64    // Pass first frame for style
+        );
 
-        if(refinedBase64_PNG) {
-            const jpegBase64 = await convertToJpeg(refinedBase64_PNG);
+        if(refinedBase64_PNG) {
+            const jpegBase64 = await convertToJpeg(refinedBase64_PNG);
 
-            const framePrompt = `Sequence Frame ${i+1}/${roughFrames.length}: ${promptText}`;
+            const framePrompt = `Sequence Frame ${i+1}/${roughFrames.length}: ${promptText}`;
 
-
-
-
-
-        // ⚠️ MODIFIED: saveFrameToTimeline now includes storyboardId
-        await saveFrameToTimeline(jpegBase64, framePrompt);
-        
-        if (i === 0) {
-            firstFinalFrame_base64 = jpegBase64;
-            firstFinalFrame_mime = 'image/jpeg';
-        }
-        
-        previousFinalFrame_base64 = jpegBase64;
-        previousFinalFrame_mime = 'image/jpeg';
-    
-    } else {
-        showSimpleModal(`Error refining frame ${i+1}. Sequence aborted.`);
-        break; 
-    }
+        await saveFrameToTimeline(jpegBase64, framePrompt);
+        
+        if (i === 0) {
+            firstFinalFrame_base64 = jpegBase64;
+        }
+        
+        previousFinalFrame_base64 = jpegBase64;
+    
+    } else {
+        showSimpleModal(`Error refining frame ${i+1}. Sequence aborted.`);
+        break; 
+    }
     seqProgressBar.style.width = `${((i+1)/roughFrames.length)*100}%`;
 }
 
@@ -954,59 +1009,43 @@ window.closeSequenceWizard();
 // ----------------- REFINEMENT + SAVE HELPERS -----------------
 
 async function refineRoughFrame(
-    roughBase64,
-    prevFrameBase64,
-    prevFrameMime,
-    prompt,
-    fullSpriteSheetBase64,
-    firstFrameBase64,
-    firstFrameMime
+    roughBase64,
+    prevFrameBase64,
+    prompt,
+    fullSpriteSheetBase64,
+    firstFrameBase64
 ) {
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
-    
-    const sys = `You are a professional animator. Your job is to create a single, clean, final animation frame. You will be given up to four inputs: 1.  **[FULL_STORYBOARD]:** A 16-frame storyboard with sketches, arrows, and notes. Use this to understand the *overall motion and intent*. 2.  **[ROUGH_SKETCH]:** The *specific* sketch from the storyboard for the *current* frame. Use this as the main reference for the pose and composition. 3.  **[CHARACTER_REFERENCE] (if provided):** The *very first rendered frame* of the sequence. **Use this as the primary reference for consistent character design, color palette, and overall style throughout the entire animation.** 4.  **[PREVIOUS_FRAME] (if provided):** The final, colored frame that came *just before* this one. Use this for *immediate continuity* (e.g., ensuring the position flows smoothly from this frame).  **Your Task:** - Create the *next* frame in the sequence. - **Style/Character:** Match the \`[CHARACTER_REFERENCE]\` first and foremost. - **Pose/Action:** Match the \`[ROUGH_SKETCH]\`. - **Continuity:** Ensure the motion flows from the \`[PREVIOUS_FRAME]\`. - **Context:** Use the \`[FULL_STORYBOARD]\` to understand the motion. - **IMPORTANT:** Do NOT include any arrows, text, or grid lines from the storyboard in your final image.`;
-    
-    const userPrompt = `Render the final frame for this sketch: ${prompt}`;
-    
-    const parts = [
-        { text: sys },
-        { text: userPrompt },
-        { text: "[FULL_STORYBOARD]:" },
-        { inlineData: { mimeType: "image/png", data: fullSpriteSheetBase64 } },
-        { text: "[ROUGH_SKETCH]:" },
-        { inlineData: { mimeType: "image/png", data: roughBase64 } }
-    ];
+    const refinementPrompt = [
+        "You are a professional animator producing the next polished frame in a sequence.",
+        `Scene and action: ${prompt}`,
+        "Use the attached rough sketch as the pose/composition guide and remove all arrows, grid lines, or text.",
+        fullSpriteSheetBase64 ? "Maintain staging and motion continuity with the 16-frame storyboard context." : "",
+        firstFrameBase64 ? "Match style, palette, rendering quality, and character design to the first rendered frame of the sequence." : "",
+        prevFrameBase64
+            ? "Ensure the motion flows smoothly from the previous rendered frame."
+            : "This is the first rendered frame; establish a clean, definitive look."
+    ]
+        .filter(Boolean)
+        .join(" ");
 
-    if (firstFrameBase64) {
-        parts.push({ text: "[CHARACTER_REFERENCE]:" });
-        parts.push({ inlineData: { mimeType: firstFrameMime, data: firstFrameBase64 } });
-    }
+    try {
+        const formData = new FormData();
+        formData.append("model", "gpt-image-1");
+        formData.append("prompt", refinementPrompt);
+        formData.append("response_format", "b64_json");
+        formData.append("image", base64ToBlob(roughBase64, "image/png"), "rough.png");
 
-    if (prevFrameBase64) {
-        parts.push({ text: "[PREVIOUS_FRAME]:" });
-        parts.push({ inlineData: { mimeType: prevFrameMime, data: prevFrameBase64 } });
-    } else {
-        parts.push({
-            text: "[PREVIOUS_FRAME]: None. This is the first frame. Establish a clear, polished, digital art style based on the prompt."
-        });
-    }
+        const response = await openaiImageRequest({
+            endpoint: "/images/edits",
+            body: formData,
+            isMultipart: true
+        });
 
-    try {
-        const res = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                contents: [{ parts }],
-                generationConfig: { responseModalities: ["IMAGE"] }
-            })
-        });
-        if (!res.ok) throw new Error(res.statusText);
-        const data = await res.json();
-        return data.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
-    } catch (e) {
-        console.error(e);
-        return null;
-    }
+        return response?.data?.[0]?.b64_json || null;
+    } catch (e) {
+        console.error(e);
+        return null;
+    }
 }
 
 async function convertToJpeg(pngBase64) {
@@ -1023,7 +1062,7 @@ async function convertToJpeg(pngBase64) {
     });
 }
 
-// ⚠️ MODIFIED: Now links the frame to its storyboard
+// Link each saved frame to its storyboard
 async function saveFrameToTimeline(base64, prompt) {
     const newFrame = {
         base64: base64,
@@ -1072,16 +1111,16 @@ generateBtn.addEventListener('click', async () => {
 });
 
 window.onTweenClick = async (index) => {
-    currentSelectionMode = 'splice';
-    spliceIndex = index + 1; 
-    candidatesHeader.innerText = `Select Tween for ${index + 1} - ${index + 2}`;
-    
-    // ⚠️ FUTURE: This is where you would load the storyboard
-    // const frame = frames[index];
-    // if (frame.storyboardId) {
-    //     console.log("This frame belongs to storyboard:", frame.storyboardId);
-    //     // You would getDoc from /storyboards/{frame.storyboardId}
-    //     // and pass it to generateTweenFrame
+    currentSelectionMode = 'splice';
+    spliceIndex = index + 1; 
+    candidatesHeader.innerText = `Select Tween for ${index + 1} - ${index + 2}`;
+    
+    // Future: load storyboard context for tween generation
+    // const frame = frames[index];
+    // if (frame.storyboardId) {
+    //     console.log("This frame belongs to storyboard:", frame.storyboardId);
+    //     // You would getDoc from /storyboards/{frame.storyboardId}
+    //     // and pass it to generateTweenFrame
     // }
     
     await generateCandidates(index);
@@ -1484,16 +1523,16 @@ function showSimpleModal(message, onConfirm) {
 // GIF export ----------------------------------------------------------------
 compileBtn.addEventListener("click", async () => {
     try {
-        if (!frames || frames.length === 0) {
-            showSimpleModal("No frames to export.");
-            return;
-        }
-        const activeFrames = frames.filter((f) => f.enabled);
-        if (activeFrames.length === 0) {
-            showSimpleModal("All frames are disabled. Enable at least one frame.");
-            return;
-        }
-        if (typeof window.GIF === "undefined") {
+        if (!frames || frames.length === 0) {
+            showSimpleModal("No frames to export.");
+            return;
+        }
+        const activeFrames = getEnabledFrames();
+        if (activeFrames.length === 0) {
+            showSimpleModal("All frames are disabled. Enable at least one frame.");
+            return;
+        }
+        if (typeof window.GIF === "undefined") {
             showSimpleModal("GIF.js library is not available.");
             return;
         }
@@ -1518,22 +1557,20 @@ compileBtn.addEventListener("click", async () => {
                 };
                 img.src = `data:${mimeType};base64,${frame.base64}`;
             });
-        });
+        });
 
-        await Promise.all(addFramePromises);
+        await Promise.all(addFramePromises);
 
-        downloadOverlay.classList.remove("hidden");
-        downloadOverlay.classList.add("flex");
-        // small timeout so the transition can apply
-        setTimeout(() => {
-            downloadOverlay.classList.add("opacity-100");
-            modalCard.classList.add("scale-100");
-        }, 10);
+        toggleOverlay(downloadOverlay, true, {
+            activeClasses: ["opacity-100"],
+            animationDelay: 300,
+            onShow: () => modalCard.classList.add("scale-100")
+        });
 
-        gif.on("finished", (blob) => {
-            const url = URL.createObjectURL(blob);
-            const imgEl = document.getElementById("finalGifPreview");
-            const linkEl = document.getElementById("dlLink");
+        gif.on("finished", (blob) => {
+            const url = URL.createObjectURL(blob);
+            const imgEl = document.getElementById("finalGifPreview");
+            const linkEl = document.getElementById("dlLink");
             imgEl.src = url;
             linkEl.href = url;
             linkEl.download = "motion-studio.gif";
